@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>DZHeatCtrl</title>
+<meta http-equiv='Content-Type' content='text/html; charset=utf-8' />
+<meta name='viewport' content='width=device-width, initial-scale=1.0, minimum-scale=1.0, shrink-to-fit=no' />
+<link href='favicon.ico' rel='icon' type='image/x-icon'>
+<link href='bootstrap.min.css' rel='stylesheet'>
+<link href='bootstrap-slider.min.css' rel='stylesheet' type='text/css'>
+<!--<link rel='stylesheet' href='https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css' integrity='sha384-Gn5384xqQ1aoWXA+058RXPxPg6fy4IWvTNh0E263XmFcJlSAwiGgFAW/dAiS6JXm' crossorigin='anonymous'>-->
+<link href='font-awesome.min.css' rel='stylesheet' type='text/css'>
+<!--<link href='https://zyra.ro/common/js/bootstrap-slider/dist/css/bootstrap-slider.min.css' rel='stylesheet' type='text/css'>-->
+<link href='style.css' rel='stylesheet' type='text/css'>
+</head>
+<body>
+	<header class='py-3 bg-dark text-white'>
+		<div class='container-fluid'>
+			<div class='row'>
+				<div class='col text-center'>DZ Fűtésvezérlő</div>
+			</div>
+		</div>
+	</header>
+<!--	<div class="container">
+		<div class="row py-2 on">
+			<div class="col-8 obj-name">csap1</div>
+			<div class="col-4 on"><i class="fa fa-level-down"></i></div>
+			<div class="col-4 off"><i class="fa fa-level-up"></i></div>
+		</div>
+	</div>-->
+	<!--<div class='container' style='background-color: darkseagreen;'>-->
+	<div id='systemCont' class='container'>
+		<div class='row py-2'>
+			<div id='systemState' class='col obj-name font-weight-bold'></div>
+		</div>
+	</div>
+	<div class='container'>
+		<div class='row py-2 text-right font-weight-bold'>
+			<div class='col-8 obj-name'>&nbsp;</div>
+			<div class='col-3'><i class='fa fa-thermometer'></i></div>
+			<div class='col-1'>&nbsp;</div>
+<!--			<div class='col'>min °C</div>
+			<div class='col'>max °C</div>-->
+		</div>
+	</div>
+	<div id='temperatureContent' class='container'></div>
+	<div id='gateContent' class='container'></div>
+	<nav class='navbar fixed-bottom navbar-expand-sm navbar-dark bg-dark'>
+		<ul class='navbar-nav'>
+			<li><span class='nav-link'>verzió:&nbsp;</span></li>
+		</ul>
+		<ul class='navbar-nav mr-auto'>
+			<li><span class='nav-link' id='version'></span></li>
+		</ul>
+		<ul class='navbar-nav'>
+			<li><span class='nav-link'>frissítve:&nbsp;</span></li>
+		</ul>
+		<ul class='navbar-nav'>
+			<li><span class='nav-link' id='last-update'></span></li>
+		</ul>
+	</nav>
+<script src='jquery-3.3.1.min.js'></script>
+<script src='bootstrap.min.js'></script>
+<script src='bootstrap-slider.min.js'></script>
+<script src='index.js'></script>
+<!--<script src='https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.12.9/umd/popper.min.js' integrity='sha384-ApNbgh9B+Y1QKtv3Rn7W3mgPxhU9K/ScQsAP7hUibX39j7fakFPskvXusvfa0b4Q' crossorigin='anonymous'></script>
+<script src='https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/js/bootstrap.min.js' integrity='sha384-JZR6Spejh4U02d8jOt6vLEHfe/JQGiRRSQQxSfFWpi1MquVdAyjUar5+76PVCmYl' crossorigin='anonymous'></script>
+<script src='https://zyra.ro/common/js/bootstrap-slider/dist/bootstrap-slider.js'></script>-->
+
+</body>
+</html>

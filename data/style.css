@@ -1,0 +1,27 @@
+/*body {
+  font-size: 2rem;
+}*/
+.attr {
+  font-size: 1.4rem;
+  text-align: right;
+}
+.obj-name {
+  font-size: 1.5rem;
+}
+.row.on > .on {
+	display: block;
+}
+.row.on > .off {
+	display: none;
+}
+.row.off > .on {
+	display: none;
+}
+.row.off > .off {
+	display: block;
+}
+@media (min-width: 576px) {
+  .obj-name {
+    font-size: initial;
+  }
+}
