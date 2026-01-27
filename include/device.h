@@ -1,8 +1,13 @@
 #ifndef __DEVICE_H
 #define __DEVICE_H
 
-// #include <Arduino.h>
+#include <Arduino.h>
 #include <ArduinoJson.h>
+#if defined(ESP32)
+    #include <WiFi.h>
+#elif defined(ESP8266)
+    #include <ESP8266WiFi.h>
+#endif
 #include "ds18b20_utils.h"
 
 #define SE_VERSION 0
@@ -19,16 +24,7 @@
 #define DEV_FURNACE 102
 #define DEV_SYSTEM 103 // generic system
 
-// temperature sensor
-// struct TTempSensor {
-//   bool isReady;
-//   String id;
-//   String name;
-//   float measuredValue;
-//   float minValue;
-//   float maxValue;
-//   bool criticalState;
-// };
+#define UNDEFINED_TEMP -1000
 
 //void controlRemoteGate(IPAddress host, String newState);
 //void controlRemoteGate(String host, String newState);
@@ -36,20 +32,30 @@
 class TDevice {
 protected:
   bool _changed;
-  size_t _jsonSize;
+  // size_t _jsonSize;
   virtual void parseConfigData(JsonDocument &doc) = 0;
+  virtual JsonDocument configData() = 0;
 public:
   String _id;
+  String _deviceId;
   uint8_t _type;
+  String _type2; // remote class name
   String _name;
   uint8_t _readyState;
   TDevice();
-  TDevice(String id, uint8_t type, String name);
+  TDevice(String id, uint8_t type, String type2, String name, String deviceId = ""); // deviceId: UUID, registered in the monitor database
   virtual ~TDevice() {}
+  virtual JsonDocument capabilities() { JsonDocument doc; return doc; }
+  virtual bool processCommand(JsonDocument &doc, String &response) { return false; }
+  virtual void publishStatus() {}
   String getConfig() const;
-  String getState() const;
+  String getState() const; // for the monitor
+  JsonDocument getState2() const; // internal
 //  String toString(); // used for serialization
-  bool loadConfig();
+  bool loadConfig(); // load configuration from the file system
+  bool storeConfig(); // store configuration to the file system
+  bool hasChanged() const { return _changed; }
+  void clearChanged() { _changed = false; }
   void setName(String name) { _name = name; }
   void setType(uint8_t type) { _type = type; }
 };
@@ -57,11 +63,12 @@ public:
 class TThermometer: public TDevice {
 protected:
   TTemperatureSensor *_tempSensor;
-  float _measuredValue;
+  // float _measuredValue;
   float _minValue;
   float _maxValue;
 
   void parseConfigData(JsonDocument &doc) override {}
+  JsonDocument configData() override { JsonDocument doc; return doc; }
 
 public:
   TThermometer();
@@ -70,65 +77,106 @@ public:
   String getConfig() const;
   float getMinValue() const { return _minValue; }
   float getMaxValue() const { return _maxValue; }
-  String getState() const;
-  float getTemperature() const {
+  JsonDocument getState() const;
+  JsonDocument getState2() const;
+  // virtual bool storeConfig() { return true; }
+  short getDirection() const {
     if (_tempSensor) {
-      return _tempSensor->measuredValue;
+      return _tempSensor->direction;
     }
-    return _measuredValue;
+    return 0;
+  }
+  float getTemperature() const {
+    if (_tempSensor) { return _tempSensor->measuredValue; }
+    return UNDEFINED_TEMP;
   }
   bool getIsCritical() const {
-    if (_tempSensor) {
-      return _tempSensor->criticalState;
-    }
-    return false; // until isn't solved properly
+    if (_tempSensor) { return _tempSensor->criticalState; }
+    return false;
   }
   void setTemperature(float value) {
     if (_tempSensor) {
       _tempSensor->measuredValue = value;
       return;
     }
-    _measuredValue = value;
+    // _measuredValue = value;
   }
-  void setSensor(String id, String name) {
-    _id = id;
-    _name = name;
-  }
+  // void setSensor(String address, String name) {
+  //   _id = address;
+  //   _name = name;
+  // }
   void setSensor(TTemperatureSensor *sensor) {
     _tempSensor = sensor;
-    _id = _tempSensor->id;
+    _id = _tempSensor->address;
     _name = _tempSensor->name;
   }
 };
 
+struct GateConfig {
+  uint8_t GPIO;
+  uint8_t openState;
+  uint8_t closedState;
+  bool isOpen;
+  bool isRemote;
+  String name;
+  // IPAddress remoteIp;
+  String ip;
+  uint16_t port;
+  unsigned long lastChange;
+};
+
 class TGate: public TDevice {
 protected:
-  uint8_t _GPIO;
-  uint8_t _openState;
-  uint8_t _closedState;
-  bool _isOpen;
-  bool _isRemote;
-  IPAddress _remoteIp;
-  String _remoteHost;
-  unsigned long _lastChange;
+  // uint8_t _GPIO;
+  // uint8_t _openState;
+  // uint8_t _closedState;
+  // bool _isOpen;
+  // bool _isRemote;
+  // IPAddress _remoteIp;
+  // String _remoteHost;
+  // uint16_t _port;
+  // unsigned long _lastChange;
+  GateConfig _config; // internal state
+  GateConfig config; // published state, used to track changes
 
-  void parseConfigData(JsonDocument &doc) override {}
+  void parseConfigData(JsonDocument &doc) override;
+  JsonDocument configData() override { JsonDocument doc; return doc; }
 
 public:
   TGate();
-  TGate(uint8_t GPIO);
+  TGate(uint8_t GPIO); // deprecated
   TGate(uint8_t GPIO, uint8_t openState);
+  void identify(String id, String name, String deviceId = "") { _id = id; _name = name; _deviceId = deviceId; }
   String getConfig() const;
-  String getState() const;
-  unsigned long getLastChange() const { return _lastChange; };
-  bool getOpen() const { return _isOpen; };
+  JsonDocument getState() const;
+  JsonDocument getState2() const;
+  // virtual bool storeConfig() { return true; }
+  unsigned long getLastChange() const { return _config.lastChange; };
+  bool getOpen() const { return _config.isOpen; };
 
-  void setGPIO(uint8_t GPIO) { _GPIO = GPIO; }
-  void setOpen(bool openState);
+  void setGPIO(uint8_t GPIO) { _config.GPIO = GPIO; }
+  void setOpen(bool bOpen, bool isForced = false);
+  void setRemoteOpen(bool bOpen);
+  void setOpenState(uint8_t openState);
   // ensure that only one is used !!!!!
-  void setRemote(IPAddress host) { _isRemote = true; _remoteIp = host; _remoteHost = ""; }
-  void setRemote(String host) { _isRemote = true; _remoteHost = host; _remoteIp = IPAddress(); }
+  void setRemote(String host) { _config.isRemote = true; _config.ip = host; }
+  void publishStatus() override;
+  // void setRemote(IPAddress host) { _config.isRemote = true; _config.ip = host; _config.remoteHost = ""; }
+  // void setRemote(String host) { _config.isRemote = true; _config.remoteHost = host; _config.remoteIp = IPAddress(); }
 };
+
+struct ThermostatConfig {
+  float refTemp; // reference temperature to decide if heating is needed
+  // uint16_t refTempMin; // minimum allowed reference temperature
+  // uint16_t refTempMax; // maximum allowed reference temperature
+  String sensibiltity; // code for sensitivity, e.g. "050" means 0.5 degree
+  bool enabled; // put on hold
+  String mode; // off, man (manual), auto
+  bool isOn; // controls the gate open/closed state
+  bool forceOn; // force the gate to be open, overrides _isOn
+  uint32_t forceOnDuration; // in seconds, how long to keep the gate open when forced
+};
+
 
 /**
  * TThermostat class
@@ -140,87 +188,40 @@ public:
  */
 class TThermostat: public TDevice {
 protected:
-  // configuration for auto mode
-  String _autoPrg; // default program
-  // 2 program, the day is split on two periods
-  int _p2H0; // integer representation of the time: 8:30 => 830
-  float _p2T0;
-  int _p2H1;
-  float _p2T1;
-  float _sensibiltity;
-  // configuration for manual mode
-  String _manPrg; // default program
-  // temperatures for manual mode
-  float _dayT; // temperature for day
-  float _nightT; // temperature for night
-  String _mode; // off, auto, man (manual)
-  bool _needsHeating;
-  String _prg; // currently running program: day, night, ...
-  bool _enabled; // put on hold
+  ThermostatConfig _config; // internal state
+  ThermostatConfig config; // published state, used to track changes
+  unsigned long _forceOnStart; // when the forced on state started
   TGate _gate;
   TThermometer _thermometer;
 
   void parseConfigData(JsonDocument &doc) override;
+  JsonDocument configData();
 
 public:
-  TThermostat(String id, String name);
-  String getConfig() const;
-  float getDayT() const { return _dayT; }
+  TThermostat(String id, String name, String deviceId); // deviceId: UUID, registered in the monitor database
   TGate& getGate() { return _gate; }
-  String getMode() const { return _mode; }
-  float getNightT() const { return _nightT; }
-  String getPrg() const { return _prg; }
-  float getRefTemperature();
-  String getState() const;
-//  String toString();
-  bool isEnabled() const { return _enabled; }
-  bool needsHeating() const { return _needsHeating; }
+  String getMode() const { return _config.mode; }
+  /**
+   * The reference temperature is used to detect if the
+   *   furnace should be turned on or off
+   */
+  float getRefTemperature() const { return _config.refTemp; }
+  float getTemperature() const { return _thermometer.getTemperature(); }
+  float getSensibility() const { return _config.sensibiltity.toFloat() / 100.0; }
+  virtual JsonDocument capabilities() override;
+  virtual bool processCommand(JsonDocument &doc, String &response) override;
+  JsonDocument getState();
+  bool isEnabled() const { return _config.enabled; }
+  bool isOn() const { return _config.isOn || _config.forceOn; }
 
-  void setEnabled(bool enabled) { _enabled = enabled; }
-  bool setMode(String mode, String prg);
-  bool setProgram(String prg);
-  bool setPrg2Hours(int h0, int h1) {
-    _p2H0 = h0;
-    _p2H1 = h1;
-    return true;
-  }
-  bool setTemperature(float temperature, String ttype);
-  TThermometer& getThermometer() { return _thermometer; }
-  bool storeConfig();
-
-  void detectChanges(String reportedState);
-};
-
-class TWoodFurnace: public TDevice {
-protected:
-  bool _isCooling; // switch on the water pump to cool the furnace
-  String _mode; // off, on
-  int _onT; // at which temperature to switch on the pump
-  int _aliveT; // above this temp. we switch off the thermostat automatically
-  TGate _pump;
-  TThermometer _thermometer;
-
-  void parseConfigData(JsonDocument &doc) override;
-
-public:
-  TWoodFurnace(String id, String name);
-  int getAliveT() const { return _aliveT; }
-  String getConfig() const;
-  String getMode() const { return _mode; }
-  String getState() const;
-  int getOnTemperature() const { return _onT; }
-  TGate& getPump() { return _pump; }
-  float getTemperature() const {
-    return _thermometer.getTemperature();
-  }
-  TThermometer& getThermometer() { return _thermometer; }
-
+  void setEnabled(bool enabled) { _config.enabled = enabled; }
+  bool forceOn(bool isForced, uint32_t duration = 0);
   bool setMode(String mode);
-  bool setTemperature(int temperature, String ttype);
-  void setOpen(bool openState) { _pump.setOpen(openState); }
-  bool storeConfig();
+  bool setRefTemperature(float temperature);
+  void adjustRefTemperature(bool up);
+  TThermometer& getThermometer() { return _thermometer; }
 
-  void detectChanges();
+  bool detectChanges(String reportedState);
 };
 
 #endif

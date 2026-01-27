@@ -1,14 +1,14 @@
 #include <WebServer.h>
-//#include <ESPmDNS.h>
 #include <ArduinoOTA.h>
-#include "FS.h"
-#include "SPIFFS.h"
+#include <LittleFS.h>
 #include <Ticker.h>
 
 #include "ds18b20_utils.h"
 #include "config.h"
-#include <device.h>
 #include "utils.h"
+#include "udp.h"
+#include "httpreq.h"
+#include "heatctrl.h"
 
 // cd /home/huba/data/work/svnroot/zyra/trunk/arduino/sketchbook/deakzoli
 // arduino-cli compile --fqbn esp32:esp32:esp32 --libraries "/home/huba/data/work/svnroot/zyra/trunk/arduino/libraries/" dzheat_esp32/
@@ -19,9 +19,12 @@ extern const char* deviceId;
 extern const char* ver;
 extern const char* SSID;
 extern const char* password;
-extern const char* logAuth;
+
+extern const char* MONITOR_URL;
+extern const char* ROOT_CA;
 unsigned long lastWiFiConnectTrial;
-WebServer webServer(80);
+// WebServer webServer(80);
+unsigned long lastAlivePublished;
 
 bool canReadTemperature = false;
 // create a one wire instance to communicate with any OneWire device
@@ -30,41 +33,84 @@ OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature dtSensors(&oneWire);
 Ticker tmrReadTemperature; // timer used to control temperature reading frequency
 extern TTemperatureSensor temperatureSensors[];
+static bool tempConversionPending = false;
+static unsigned long tempConversionStartMs = 0;
+static unsigned long tempConversionWaitMs = 750;
 
-// connected devices
-TGate wfp(PIN_WFP); // wood furnace water pump
-TGate wbp(PIN_WBP); // water buffer pump
-TGate gf(PIN_GF); // gas furnace
-TGate tap1(PIN_T1); // tap 1
-TGate tap2(PIN_T2); // tap 2
-
-
-// heating system attributes
-uint8_t hsState = HS_NONE;
-const char* hsMode = "auto";
-bool heatingTheHouse = false; // based on the signal coming from the thermostat
-unsigned long lastStateChange = 0;
-extern const char* stateNames[];
+THeatCtrl heatCtrl("heatctrl", "Vezérlő", "93d50461-cd88-4761-9d2c-cacb4086c8ca");
 
 // error handling
+#define FREQ_LOW 2
+#define FREQ_HIGH 1
 Ticker tmrError; // timer used to indicate error severity
-uint8_t errorLevel = ERR_NO_ERROR;
 bool ledIsOn = false;
-bool sendRemoteLog = false;
 
 // simulation routine
-#define SIMULATION
-#ifdef SIMULATION
-#include "simulation.h"
+uint8_t simulationRead = 0; // used to count temperature read skips when simulation is running
 
-extern int simulationStep;
-extern bool simulationRunning;
+void connectToWiFi();
+bool detectError();
+void doCommunication();
+void handleUDPRequests();
+void initDevices();
+void initFS();
+void readTemperatures();
+// void setupWebServer();
+void setupTemperatureSensors();
+void setupTimers();
+void toggleLed(String newState);
 
-void beginSimulation() {
-  startSimulation();
-  webServer.send(200, "text/html", "ok");
-}
+void setup() {
+  pinMode(PIN_LED, OUTPUT);
+  toggleLed("off");
+
+  pinMode(PIN_THERMOSTAT, INPUT_PULLUP);
+	pinMode(PIN_WFP, OUTPUT); // wood furnace water pump
+	pinMode(PIN_WBP, OUTPUT); // water buffer pump
+	pinMode(PIN_GF, OUTPUT); // gas furnace
+	pinMode(PIN_T1, OUTPUT); // tap 1
+	pinMode(PIN_T2, OUTPUT); // tap 2
+
+#ifdef DEBUG
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println();
+#else
+  delay(1500);
 #endif
+  initFS(); // initialize the file system
+  setupTemperatureSensors();
+  initDevices();
+
+  connectToWiFi();
+  // setupWebServer(); // initialize the web server
+  ArduinoOTA.begin(); // initialize OTA
+
+  setupTimers();
+	udpListen();
+}
+
+void loop() {
+  if (!WiFi.isConnected()) {
+    if (millis() - lastWiFiConnectTrial > 30 * 1000) {
+      connectToWiFi();
+    }
+  } else {
+    doCommunication();
+
+    // HTTP server listens to requests
+    // webServer.handleClient();
+    // listen if there is any request to upload code over the air
+    ArduinoOTA.handle();
+  }
+
+  readTemperatures();
+  heatCtrl.manageSystem();
+  detectError();
+  // turn on/off the LED if there is no error reported
+  if (heatCtrl.getErrorLevel() == ERR_NO_ERROR) { toggleLed(heatCtrl.isHeatingTheHouse() ? "on" : "off"); }
+	delay(3);
+}
 
 //*******************
 // Display operations
@@ -88,6 +134,20 @@ void endLoadingStep(String msg, int pause) {
 // Temperature sensors handling operations
 //*******************
 
+void setupTemperatureSensors() {
+	dtSensors.begin(); // start temperature sensors library
+	//  9 bit 0.5    precision,  ~94 ms conversion time
+	// 10 bit 0.25   precision, ~188 ms conversion time
+	// 11 bit 0.125  precision, ~375 ms conversion time
+	// 12 bit 0.0625 precision, ~750 ms conversion time
+	dtSensors.setResolution(11);
+	dtSensors.setWaitForConversion(false);
+	tempConversionWaitMs = temperatureConversionWait(dtSensors.getResolution());
+#ifdef DEBUG
+	Serial.println(enumTemperatureSensors(dtSensors).c_str()); // enumerate the accessible temperature sensors
+#endif
+}
+
 /**
  * The routine is called by the timer to enable reading the temperature sensors
  */
@@ -99,238 +159,49 @@ void enableReadTemperature() {
  * Read the temperature measured by the sensors
  */
 void readTemperatures() {
-  if (!canReadTemperature) { return; }
-  unsigned long startRead = millis();
-#ifdef SIMULATION
-  if (simulationRunning) simulationStepNext(); else {
-#endif
-  if (dtSensors.getDeviceCount() < temperatureSensorsCount) {
-    dtSensors.begin();
-    delay(500);
-    enumTemperatureSensors(dtSensors);
-    sendRemoteLog = false;
+	if (!canReadTemperature) { return; }
+  if (heatCtrl.isSimulationRunning()) {
+	  canReadTemperature = false;
+    if (simulationRead < 3) { simulationRead++; return; }
+    heatCtrl.stepSimulation(); // go to the next step
+    simulationRead = 0;
+    return;
   }
-  else {
-    DeviceAddress deviceAddress; // temperature sensor address
-    dtSensors.requestTemperatures(); // read the temperatures
-    for (uint8_t i = 0; i < dtSensors.getDeviceCount(); i++) {
-      if (dtSensors.getAddress(deviceAddress, i)) {
-        float temperature = dtSensors.getTempC(deviceAddress);
-        if (temperature != DEVICE_DISCONNECTED_C && temperature != 85.00) {
-          storeTemperature(deviceAddress, temperature);
-        }
-      }
-    }
-    sendRemoteLog = true;
-  }
-#ifdef SIMULATION
-  }
-#endif
-  canReadTemperature = false;
-  unsigned long endRead = millis();
+	unsigned long now = millis();
+	uint8_t sensorsCount = dtSensors.getDeviceCount();
+	if (sensorsCount < temperatureSensorsCount) {
+		// enumerate temperature sensors
 #ifdef DEBUG
-  for (uint8_t i = 0; i < temperatureSensorsCount; i++) {
-    Serial.print(temperatureSensors[i].measuredValue);
-    Serial.print(" ");
-  }
-//  Serial.println();
-  if (endRead > startRead) {
-    Serial.printf(", read operation took %u milliseconds [%u - %u]\n", (endRead - startRead), startRead, endRead);
-  }
+		Serial.print("temperature sensors: ");
+		Serial.println(sensorsCount);
 #endif
-}
-
-//*******************
-// Heating system operations
-//*******************
-/**
- * Put the 3-way taps into the default position
- */
-void M1() {
-  tap1.setOpen(false);
-  delay(RELAY_DELAY);
-  tap2.setOpen(false);
-  delay(RELAY_DELAY);
-}
-
-/**
- * Put the 3-way taps into the other position
- */
-void M2() {
-  tap1.setOpen(true);
-  delay(RELAY_DELAY);
-  tap2.setOpen(true);
-  delay(RELAY_DELAY);
-}
-
-/**
- * Change the state of the heating system
- */
-// void setHsState(uint8_t newState) {
-//   if (newState == hsState) return;
-//   int stateChangeDiff = millis() - lastStateChange;
-//   if (stateChangeDiff < 0) stateChangeDiff = -stateChangeDiff;
-//   if (stateChangeDiff < 1000) return;
-//   switch (newState) {
-//   case HS_PAUSED:
-//     // kind of switch off, keep taps position, but stop pumps and gas furnace
-//     // different behavior based on the old state
-//     switch (hsState) {
-//     case HS_GAS_HOUSE:
-//       gf.setOpen(false); // switch off heating from the gas furnace
-//       break;
-//     case HS_WOOD_HOUSE: // switch off heating from the wood furnace
-//       if (heatingTheHouse && (T(iTWF) > TMin(iTWF) - TDELTA)) return;
-//       wfp.setOpen(false);
-//       break;
-//     case HS_BUFFER_HOUSE: // switch off heating from the buffer
-//       if (heatingTheHouse && (T(iTBT) > TMin(iTBT) - TDELTA)) return;
-//       wbp.setOpen(false);
-//       break;
-//     case HS_WOOD_BUFFER: // switch off heating from the wood furnace
-//       if (T(iTWF) > (TMin(iTWF) - TDELTA) && T(iTWF) > T(iTBB)) return;
-//       wfp.setOpen(false);
-//       break;
-//     }
-//     break;
-//   case HS_WOOD_HOUSE:
-//     M1();
-//     wfp.setOpen(true);
-//     delay(RELAY_DELAY);
-//     wbp.setOpen(false);
-//     delay(RELAY_DELAY);
-//     gf.setOpen(false);
-//     break;
-//   case HS_BUFFER_HOUSE:
-//     M2();
-//     wfp.setOpen(false);
-//     delay(RELAY_DELAY);
-//     wbp.setOpen(true);
-//     delay(RELAY_DELAY);
-//     gf.setOpen(false);
-//     break;
-//   case HS_GAS_HOUSE:
-//     if (hsState == HS_BUFFER_HOUSE && heatingTheHouse && (T(iTBT) > TMin(iTBT) - TDELTA)) return;
-//     M1();
-//     wfp.setOpen(false);
-//     delay(RELAY_DELAY);
-//     wbp.setOpen(false);
-//     delay(RELAY_DELAY);
-//     gf.setOpen(true);
-//     break;
-//   case HS_WOOD_BUFFER:
-//     M2();
-//     wfp.setOpen(true);
-//     delay(RELAY_DELAY);
-//     wbp.setOpen(false);
-//     delay(RELAY_DELAY);
-//     gf.setOpen(false);
-//     break;
-//   default: // HS_OFF
-//     // close all gates
-//     newState = HS_OFF;
-//     wfp.setOpen(false);
-//     wbp.setOpen(false);
-//     gf.setOpen(false);
-//     tap1.setOpen(false);
-//     tap2.setOpen(false);
-//     break;
-//   }
-
-// #ifdef DEBUG
-//   Serial.print("old state: ");
-//   Serial.print(stateNames[hsState]);
-//   Serial.print(", new state: ");
-//   Serial.println(stateNames[newState]);
-// #endif
-//   hsState = newState;
-//   lastStateChange = millis();
-// }
-void setHsState(uint8_t newState) {
-  if (newState == hsState) return;
-  int stateChangeDiff = millis() - lastStateChange;
-  if (stateChangeDiff < 0) stateChangeDiff = -stateChangeDiff;
-  if (stateChangeDiff < 1000) return;
-  switch (newState) {
-  case HS_PAUSED:
-    // kind of switch off, keep taps position, but stop pumps and gas furnace
-    // different behavior based on the old state
-    switch (hsState) {
-    case HS_GAS_HOUSE:
-      gf.setOpen(false); // switch off heating from the gas furnace
-      break;
-    case HS_WOOD_HOUSE: // switch off heating from the wood furnace
-      // if (heatingTheHouse && (T(iTWF) > TMin(iTWF) - TDELTA)) return;
-      wfp.setOpen(false);
-      break;
-    case HS_BUFFER_HOUSE: // switch off heating from the buffer
-      // if (heatingTheHouse && (T(iTBT) > TMin(iTBT) - TDELTA)) return;
-      wbp.setOpen(false);
-      break;
-    case HS_WOOD_BUFFER: // switch off heating from the wood furnace
-      // if (T(iTWF) > (TMin(iTWF) - TDELTA) && T(iTWF) > T(iTBB)) return;
-      wfp.setOpen(false);
-      break;
-    }
-    break;
-  case HS_WOOD_HOUSE:
-    M1();
-    wfp.setOpen(true);
-    delay(RELAY_DELAY);
-    wbp.setOpen(false);
-    delay(RELAY_DELAY);
-    gf.setOpen(false);
-    break;
-  case HS_BUFFER_HOUSE:
-    M2();
-    wfp.setOpen(false);
-    delay(RELAY_DELAY);
-    wbp.setOpen(true);
-    delay(RELAY_DELAY);
-    gf.setOpen(false);
-    break;
-  case HS_GAS_HOUSE:
-    // if (hsState == HS_BUFFER_HOUSE && heatingTheHouse && (T(iTBT) > TMin(iTBT) - TDELTA)) return;
-    M1();
-    wfp.setOpen(false);
-    delay(RELAY_DELAY);
-    wbp.setOpen(false);
-    delay(RELAY_DELAY);
-    gf.setOpen(true);
-    break;
-  case HS_WOOD_BUFFER:
-    M2();
-    wfp.setOpen(true);
-    delay(RELAY_DELAY);
-    wbp.setOpen(false);
-    delay(RELAY_DELAY);
-    gf.setOpen(false);
-    break;
-  default: // HS_OFF
-    // close all gates
-    newState = HS_OFF;
-    wfp.setOpen(false);
-    wbp.setOpen(false);
-    gf.setOpen(false);
-    tap1.setOpen(false);
-    tap2.setOpen(false);
-    break;
-  }
-
-#ifdef DEBUG
-  Serial.print("old state: ");
-  Serial.print(stateNames[hsState]);
-  Serial.print(", new state: ");
-  Serial.println(stateNames[newState]);
-#endif
-  hsState = newState;
-  lastStateChange = millis();
+		dtSensors.begin();
+		enumTemperatureSensors(dtSensors);
+	}
+	if (!tempConversionPending) {
+		dtSensors.requestTemperatures();
+		tempConversionStartMs = now;
+		tempConversionPending = true;
+		return;
+	}
+	if (!dtSensors.isConversionComplete() && now - tempConversionStartMs < tempConversionWaitMs) {
+		return;
+	}
+	DeviceAddress deviceAddress; // temperature sensor address
+	for (uint8_t i = 0; i < sensorsCount; i++) {
+		if (!dtSensors.getAddress(deviceAddress, i)) { continue; }
+		float temperature = dtSensors.getTempC(deviceAddress);
+		if (temperature == DEVICE_DISCONNECTED_C || temperature == 85.00) { continue; }
+		storeTemperature(deviceAddress, temperature);
+	}
+	tempConversionPending = false;
+	canReadTemperature = false;
 }
 
 //*******************
 // HTML communication
 //*******************
-
+/*
 void handleNotFound() {
   webServer.send(404, "text/plain", "404: Not found"); // Send HTTP status 404 (Not Found) when there's no handler for the URI in the request
 }
@@ -361,21 +232,21 @@ String getDbVersion() {
   String t = R"({"type":0,"version":"%s"})";
   sprintf(tmp, t.c_str(), ver);
   return String(tmp);
-}
+}*/
 
 /**
  * Return information of one temperature sensor
  *
  * @param {int} idx
  * @returns {String}
- */
+ * /
 String getTempSensorState(int idx) {
   char tmp[255];
   String t = R"({"type":%u,"name":"%s","t":%0.2f,"tMin":%0.2f,"tMax":%0.2f})";
   sprintf(tmp, t.c_str(), SE_TEMPERATURE, temperatureSensors[idx].name, temperatureSensors[idx].measuredValue,
     temperatureSensors[idx].minValue, temperatureSensors[idx].maxValue);
   return String(tmp);
-}
+}* /
 
 String getSystemInfo() {
   char tmp[255];
@@ -397,17 +268,17 @@ String getThermostatState() {
 
 String getAllState() {
   String resp = "[";
-  resp += getDbVersion();
-  resp += "," + getSystemInfo();
-  for (int i = 0; i < temperatureSensorsCount; i++) {
-    resp += "," + getTempSensorState(i);
-  }
-  resp += "," + getThermostatState();
-  resp += "," + tap1.getState();
-  resp += "," + tap2.getState();
-  resp += "," + wfp.getState();
-  resp += "," + wbp.getState();
-  resp += "," + gf.getState();
+  // resp += getDbVersion();
+  // resp += "," + getSystemInfo();
+  // for (int i = 0; i < temperatureSensorsCount; i++) {
+  //   resp += "," + getTempSensorState(i);
+  // }
+  // resp += "," + getThermostatState();
+  // resp += "," + tap1.getState();
+  // resp += "," + tap2.getState();
+  // resp += "," + wfp.getState();
+  // resp += "," + wbp.getState();
+  // resp += "," + gf.getState();
   resp += "]";
   return resp;
 }
@@ -460,7 +331,7 @@ void setAnything() {
     ESP.restart();
   }
   webServer.send(200, "text/html", resp.c_str());
-}
+}*/
 
 /**
  * Returns the corresponding content type of the
@@ -468,7 +339,7 @@ void setAnything() {
  *
  * @param {String} ext - the extension
  * @returns {String} -
-*/
+* /
 String contentType(String ext) {
 	if (ext.equalsIgnoreCase("ico")) { return "image/x-icon"; } else
 	if (ext.equalsIgnoreCase("html")) { return "text/html"; } else
@@ -476,25 +347,25 @@ String contentType(String ext) {
 	if (ext.equalsIgnoreCase("css")) { return "text/css; charset=utf-8"; } else
 	if (ext.equalsIgnoreCase("woff2")) { return "application/x-font-woff2"; } else
 	{ return ""; }
-}
+}*/
 
 /**
  * Load a file from the file system and return its content as a
  *   response to a request.
-*/
+* /
 void sendFile(String fName) {
-	if (!SPIFFS.exists("/" + fName)) { handleNotFound(); }
-	File f = SPIFFS.open("/" + fName, "r");
-	if (!f) { handleNotFound(); }
-	// split file name into name and extension
-	int n = fName.lastIndexOf(".");
-	String ext = fName.substring(n + 1);
-	webServer.streamFile(f, contentType(ext));
-}
+	// if (!SPIFFS.exists("/" + fName)) { handleNotFound(); }
+	// File f = SPIFFS.open("/" + fName, "r");
+	// if (!f) { handleNotFound(); }
+	// // split file name into name and extension
+	// int n = fName.lastIndexOf(".");
+	// String ext = fName.substring(n + 1);
+	// webServer.streamFile(f, contentType(ext));
+}*/
 
 /**
  * A lambda expression stored in a function pointer type variable
-*/
+* /
 std::function<void()> sendIndex {
 	[]() {
 		sendFile("index.html");
@@ -536,9 +407,62 @@ void setupWebServer() {
   webServer.begin();
   // wait 2 s for the server to start
   endLoadingStep("HTTP server started", 2000);
+}*/
+
+/**
+ * Send a status message to the MQTT broker
+ */
+void publishStatus() {
+	// send the heartbeat to the monitoring server
+	JsonDocument doc = heatCtrl.getState();
+
+	String url = String(MONITOR_URL) + "/api/device/" + deviceId + "/heartbeat";
+	httpPost(url, doc, {{"X-Device-ID", deviceId}});
 }
 
-void connectToWiFi(bool inSetup) {
+/**
+ * The commands are coming from the web ui
+ */
+void procesDeviceCommand(TDevice &device) {
+	String url = String(MONITOR_URL) + "/api/device/" + device._deviceId + "/command/next";
+	String response = httpGet(url, {{"X-Device-ID", deviceId}});
+	if (response == "") { return; }
+
+	bool cmdProcessed = false;
+	String processResult = "";
+	JsonDocument doc;
+	DeserializationError error = deserializeJson(doc, response);
+	if (!error) {
+		JsonDocument payloadDoc = doc["payload"];
+		cmdProcessed = device.processCommand(payloadDoc, processResult);
+	}
+
+	// acknowledge the command
+	url = String(MONITOR_URL) + "/api/device/" + device._deviceId + "/command/ack";
+	JsonDocument ackDoc;
+	ackDoc["command_id"] = doc["command_id"];
+	ackDoc["success"] = cmdProcessed;
+	ackDoc["result"] = processResult;
+	httpPost(url, ackDoc, {{"X-Device-ID", deviceId}});
+}
+
+/**
+ * Read and process commands one by one for every device
+ */
+void processCommands() {
+  handleUDPRequests();
+	procesDeviceCommand(heatCtrl);
+}
+
+void doCommunication() {
+	if (millis() - lastAlivePublished < 5 * 1000) { return; }
+
+	processCommands();
+	publishStatus();
+	lastAlivePublished = millis();
+}
+
+void connectToWiFi() {
   int i = 0;
   displayLoadingStep("connecting to WiFi");
 
@@ -570,19 +494,9 @@ void connectToWiFi(bool inSetup) {
 //    Serial.println(WiFi.status());
 //#endif
 #ifdef DEBUG
-    Serial.println("connected to " + String(SSID) + "\nIP address is: " + WiFi.localIP().toString());
+		Serial.println("connected to " + String(SSID) + "\nIP address is: " + WiFi.localIP().toString() + "\nstrength: " + String(WiFi.RSSI()));
+		if (!WiFi.getAutoReconnect()) { Serial.println("auto reconnect is not enabled"); }
 #endif
-/*    if (inSetup) {
-      bool mDNSReady = MDNS.begin(device); // start the mDNS responder
-#ifdef DEBUG
-      if (mDNSReady) {
-        Serial.println("mDNS: " + String(device));
-      }
-      else {
-        Serial.println("Error setting up MDNS responder!");
-      }
-#endif
-    }*/
   }
   else {
 #ifdef DEBUG
@@ -600,12 +514,16 @@ void connectToWiFi(bool inSetup) {
  * initialize the file system
  */
 void initFS() {
-  if (SPIFFS.begin()) {
-    displayLoadingStep("SPIFFS is activated");
-  }
-  else {
-    displayLoadingStep("unable to activate SPIFFS");
-  }
+	if (!LittleFS.begin()) {
+#ifdef DEBUG
+		Serial.println("unable to activate FS");
+#endif
+		return;
+	}
+#ifdef DEBUG
+	Serial.println("FS is activated");
+#endif
+	// listDir(LittleFS, "/", 1);
 }
 
 //*******************
@@ -639,27 +557,28 @@ void handleCriticalState() {
 
 void setErrorLevel(uint8_t newLevel) {
   if (newLevel > 2) { return; }
-  if (newLevel != errorLevel) {
+  if (newLevel == heatCtrl.getErrorLevel()) { return; }
 #ifdef DEBUG
-    Serial.printf("set error state to %d\n", newLevel);
-#endif
-    tmrError.detach();
-    switch (newLevel) {
-      case ERR_NO_ERROR:
-        // LED is on when heating the house
-        if (!heatingTheHouse) { toggleLed("off"); }
-        break;
-      case ERR_LOW:
-        tmrError.attach(FREQ_LOW, toggleLed);
-        break;
-      default:
-        tmrError.attach(FREQ_HIGH, toggleLed);
-        break;
-    }
-    errorLevel = newLevel;
-//    tmrError.attach(freqError, showErrorLevel);
-    handleCriticalState();
+  if (heatCtrl.isSimulationRunning()) {
+    Serial.printf("step: %u\n", heatCtrl.getStep());
   }
+  Serial.printf("set error state to %d\n", newLevel);
+#endif
+  tmrError.detach();
+  switch (newLevel) {
+    case ERR_NO_ERROR:
+      // LED is on when heating the house
+      if (!heatCtrl.isHeatingTheHouse()) { toggleLed("off"); }
+      break;
+    case ERR_LOW:
+      tmrError.attach(FREQ_LOW, toggleLed);
+      break;
+    default:
+      tmrError.attach(FREQ_HIGH, toggleLed);
+      break;
+  }
+  heatCtrl.setErrorLevel(newLevel);
+  handleCriticalState();
 }
 
 bool detectError() {
@@ -686,128 +605,46 @@ void setupTimers() {
   enableReadTemperature();
 }
 
-void setup() {
-  pinMode(PIN_LED, OUTPUT);
-  toggleLed("off");
 
-  pinMode(PIN_THERMOSTAT, INPUT_PULLUP);
-
-  // gate type controls final configuration
-  wfp.setName("fás kazán vízpumpa");
-  wbp.setName("puffer vízpumpa");
-  gf.setType(SE_GAS_FURNACE);
-  gf.setName("gáz kazán");
-  tap1.setType(SE_TWO_STATE_TAP);
-  tap1.setName("csap1");
-  tap2.setType(SE_TWO_STATE_TAP);
-  tap2.setName("csap2");
-
-#ifdef DEBUG
-  Serial.begin(115200);
-  delay(1000);
-  Serial.println();
-#else
-  delay(1500);
-#endif
-  setHsState(HS_OFF);
-
-  connectToWiFi(true);
-  dtSensors.begin(); // start temperature sensors library
-#ifdef DEBUG
-  Serial.println(enumTemperatureSensors(dtSensors).c_str()); // enumerate the accessible temperature sensors
-#endif
-  initFS(); // initialize the file system
-  setupWebServer(); // initialize the web server
-  ArduinoOTA.begin(); // initialize OTA
-
-  setupTimers();
+void initDevices() {
+  heatCtrl.wfp.setGPIO(PIN_WFP);
+	heatCtrl.wfp.identify("wfpswitch", "fás kazán vízpumpa", "b219bea7-d910-4e40-99e8-300f3e05a41a");
+	heatCtrl.wfp.loadConfig();
+  heatCtrl.wbp.setGPIO(PIN_WBP);
+	heatCtrl.wbp.identify("wbpswitch", "puffer vízpumpa", "4c436be8-c444-4183-b50f-de44a504c9c0");
+  heatCtrl.wbp.loadConfig();
+  heatCtrl.gf.setGPIO(PIN_GF);
+  heatCtrl.gf.setType(SE_GAS_FURNACE);
+	heatCtrl.gf.identify("gfswitch", "gáz kazán", "fa41f40d-5232-4053-9e44-ea8a3f250ab4");
+  heatCtrl.gf.loadConfig();
+  heatCtrl.tap1.setGPIO(PIN_T1);
+  heatCtrl.tap1.setType(SE_TWO_STATE_TAP);
+	heatCtrl.tap1.identify("tap1switch", "csap1", "5cbaa836-9ceb-4162-87dd-626d543f2542");
+  heatCtrl.tap1.loadConfig();
+  heatCtrl.tap2.setGPIO(PIN_T2);
+  heatCtrl.tap2.setType(SE_TWO_STATE_TAP);
+	heatCtrl.tap2.identify("tap2switch", "csap2", "c82e1f6d-2dad-4ed3-868c-3f1d290cc99f");
+  heatCtrl.tap2.loadConfig();
+  heatCtrl.setHsState(HS_OFF);
 }
 
-void manageSystem() {
-//  if (detectError()) return;
+/**
+ * Check for incoming UDP request
+ */
+void handleUDPRequests() {
+	String request = detectUDPRequest("");
+	if (request == "") { return; }
+	// Serial.println("udp message: " + request);
+  ZList<TUDPParam> params = parseUDPMessage(request);
 
-#ifdef SIMULATION
-  if (!simulationRunning)
-#endif
-  heatingTheHouse = digitalRead(PIN_THERMOSTAT) == LOW;
-
-  if (hsMode == "auto") { // automatic command mode
-    // turn on/off the LED if there is no error reported
-    if (errorLevel == ERR_NO_ERROR) { toggleLed(heatingTheHouse ? "on" : "off"); }
-    if (heatingTheHouse) {
-      if (T(iTWF) > TMin(iTWF) + TDELTA){
-        setHsState(HS_WOOD_HOUSE); // heating from the wood furnace
-      }
-      if (hsState == HS_WOOD_HOUSE && T(iTWF) < TMin(iTWF) - TDELTA) {
-        hsState = HS_PAUSED; // switch off heating from the wood furnace
-      }
-      if (T(iTBT) > TMin(iTBT) + TDELTA) {
-        setHsState(HS_BUFFER_HOUSE); // heating from the water buffer
-      }
-      if (hsState == HS_BUFFER_HOUSE && T(iTBT) < TMin(iTBT) - TDELTA) {
-        hsState = HS_PAUSED; // switch off heating from the water buffer
-      }
-      if (hsState != HS_WOOD_HOUSE || hsState != HS_BUFFER_HOUSE) {
-        setHsState(HS_GAS_HOUSE); // heating from the gas furnace
-      }
-      // if (T(iTWF) > TMin(iTWF) + TDELTA) {
-      //   setHsState(HS_WOOD_HOUSE); // heating from the wood furnace
-      // }
-      // else {
-      //   if (T(iTBT) > TMin(iTBT) + TDELTA) {
-      //     setHsState(HS_BUFFER_HOUSE); // heating from the water buffer
-      //   }
-      //   else {
-      //     setHsState(HS_GAS_HOUSE); // heating from the gas furnace
-      //   }
-      // }
+	String cmd = getUDPParam(params, "cmd"); // what is the command, the other parameters depends on this
+	if (cmd.equalsIgnoreCase("setState")) {
+		String newState = getUDPParam(params, "state");
+		String device = getUDPParam(params, "device");
+    if (device.equalsIgnoreCase("gfswitch")) {
+      if (heatCtrl.isSimulationRunning()) { return; }
+      heatCtrl.setHeatingTheHouse(newState.equalsIgnoreCase("on"));
     }
-    else {
-      if (T(iTWF) > T(iTBB)) {
-      // if (T(iTWF) > (TMin(iTWF) + TDELTA) && T(iTWF) > T(iTBB)) {
-        // heating the water buffer from the wood furnace while it's temperature
-        // is greater than the water buffer's temperature measured at the bottom (or middle)
-        setHsState(HS_WOOD_BUFFER);
-      }
-      else {
-        // kind of switch off
-        setHsState(HS_PAUSED); // keep taps position, but stop water pumps and gas furnace
-      }
-    }
-  }
-  else { // manual command mode, nothing allowed yet
-    if (hsState == HS_WOOD_HOUSE && T(iTWF) < TMin(iTWF)) {
-      setHsState(HS_PAUSED);
-    } else
-    if (hsState == HS_BUFFER_HOUSE && T(iTBT) < TMin(iTBT)) {
-      setHsState(HS_PAUSED);
-    } else
-    if (hsState == HS_WOOD_BUFFER) {
-      if (T(iTWF) < TMin(iTWF) || T(iTWF) < T(iTBB)) {
-        setHsState(HS_PAUSED);
-      }
-    }
-  }
-
-  detectError();
+	}
 }
 
-void loop() {
-  if (!WiFi.isConnected()) {
-    if (millis() - lastWiFiConnectTrial > 30 * 1000) {
-      connectToWiFi(false);
-    }
-  }
-  // HTTP server listens to requests
-  webServer.handleClient();
-  // listen if there is any request to upload code over the air
-  ArduinoOTA.handle();
-
-  readTemperatures();
-  manageSystem();
-//   if (sendRemoteLog) {
-// //    if (remoteLog(1, getAllState(), logAuth, deviceId)) Serial.println("log sent");
-//     remoteLog(1, getAllState(), logAuth, deviceId);
-//     sendRemoteLog = false;
-//   }
-}

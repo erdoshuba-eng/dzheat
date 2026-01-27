@@ -1,0 +1,73 @@
+
+step: 0
+heating the house: NO
+old state: (5) gáz kazán -> ház, new state: (2) várakozó
+fás kazán: 25.00, puffer fent: 25.00, puffer lent: 25.00,
+
+step: 0
+heating the house: NO
+old state: (2) várakozó, new state: (6) fás kazán -> puffer
+fás kazán: 25.00, puffer fent: 25.00, puffer lent: 25.00,
+
+step: 2
+heating the house: NO
+old state: (6) fás kazán -> puffer, new state: (2) várakozó
+fás kazán: 60.00, puffer fent: 25.00, puffer lent: 61.00,
+step: 3
+set error state to 1
+
+step: 4
+heating the house: NO
+old state: (2) várakozó, new state: (6) fás kazán -> puffer
+fás kazán: 90.00, puffer fent: 90.00, puffer lent: 90.00,
+step: 4
+set error state to 2
+
+step: 5
+heating the house: NO
+old state: (6) fás kazán -> puffer, new state: (2) várakozó
+fás kazán: 30.00, puffer fent: 90.00, puffer lent: 90.00,
+step: 5
+set error state to 1
+step: 6
+set error state to 0
+
+step: 7
+heating the house: YES
+old state: (2) várakozó, new state: (4) puffer -> ház
+fás kazán: 30.00, puffer fent: 75.00, puffer lent: 70.00,
+
+step: 8
+heating the house: YES
+old state: (4) puffer -> ház, new state: (3) fás kazán -> ház
+fás kazán: 80.00, puffer fent: 75.00, puffer lent: 70.00,
+
+step: 9
+heating the house: NO
+old state: (3) fás kazán -> ház, new state: (6) fás kazán -> puffer
+fás kazán: 80.00, puffer fent: 75.00, puffer lent: 70.00,
+
+step: 10
+heating the house: NO
+old state: (6) fás kazán -> puffer, new state: (2) várakozó
+fás kazán: 30.00, puffer fent: 75.00, puffer lent: 70.00,
+
+step: 11
+heating the house: YES
+old state: (2) várakozó, new state: (4) puffer -> ház
+fás kazán: 30.00, puffer fent: 75.00, puffer lent: 70.00,
+
+step: 13
+heating the house: YES
+old state: (4) puffer -> ház, new state: (2) várakozó
+fás kazán: 30.00, puffer fent: 30.00, puffer lent: 30.00,
+
+step: 13
+heating the house: YES
+old state: (2) várakozó, new state: (5) gáz kazán -> ház
+fás kazán: 30.00, puffer fent: 30.00, puffer lent: 30.00,
+
+step: 14
+heating the house: NO
+old state: (5) gáz kazán -> ház, new state: (6) fás kazán -> puffer
+fás kazán: 30.00, puffer fent: 30.00, puffer lent: 30.00,

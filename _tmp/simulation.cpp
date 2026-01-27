@@ -10,7 +10,8 @@
 #include "ds18b20_utils.h"
 
 extern char* hsMode;
-extern bool heatingTheHouse;
+// extern bool heatingTheHouse;
+bool heatingTheHouse;
 
 int simulationStep = 0;
 bool simulationRunning = false;
@@ -49,7 +50,7 @@ void simulationStepNext() {
 
 void startSimulation() {
   simulationRunning = true;
-  hsMode = "auto";
+  hsMode = (char *)"auto";
   heatingTheHouse = false;
   storeTemperature("fás kazán", 25);
   storeTemperature("puffer fent", 25);

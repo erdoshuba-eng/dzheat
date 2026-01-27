@@ -1,8 +1,9 @@
 #include "ds18b20_utils.h"
-// #include <utils.h>
+//#include <utils.h>
+// #include "device.h"
 #include "config.h"
 
-extern TTemperatureSensor temperatureSensors[]; // defined in config.cpp
+extern TTemperatureSensor temperatureSensors[];
 
 /**
  * convert a sensor address to a string format
@@ -22,19 +23,26 @@ String addressToStr(DeviceAddress addr) {
 String enumTemperatureSensors(DallasTemperature &dtSensors) {
 	DeviceAddress deviceAddress; // temperature sensor address
 	int temperatureSensorsFound = dtSensors.getDeviceCount();
-	if (temperatureSensorsFound <= 0) { return "false"; }
+	if (temperatureSensorsFound > 0) {
+		String s = "found " + String(temperatureSensorsFound) + " temperature sensors\n";
 
-	String s = "found " + String(temperatureSensorsFound) + " temperature sensors\n";
-
+//   uint8_t n = 0; // the index where we store the address
 	// loop through the temperature sensors and print their addresses
-	for (uint8_t i = 0; i < temperatureSensorsFound; i++) {
-		if (dtSensors.getAddress(deviceAddress, i)) {
-			s += "device " + String(i) + " has address " + addressToStr(deviceAddress) + "\n";
-		} else {
-			s += "found ghost device at " + String(i) + "\n";
+		for (uint8_t i = 0; i < temperatureSensorsFound; i++) {
+			if (dtSensors.getAddress(deviceAddress, i)) {
+				s += "device " + String(i) + " has address " + addressToStr(deviceAddress) + "\n";
+//      if (n < temperatureSensorsCount) {
+//        temperatureSensors[n].id = addressToStr(deviceAddress);
+//        n++;
+//      }
+			}
+			else {
+				s += "found ghost device at " + String(i) + "\n";
+			}
 		}
+		return s;
 	}
-	return s;
+	return "false";
 }
 
 TTemperatureSensor getTemperatureSensor(uint8_t idx) {
@@ -42,28 +50,9 @@ TTemperatureSensor getTemperatureSensor(uint8_t idx) {
 }
 
 uint8_t getTemperatureSensorsCount() {
+	// return countof(temperatureSensors);
+	// return sizeof(temperatureSensors) / sizeof(temperatureSensors[0]);
 	return temperatureSensorsCount;
-}
-
-JsonDocument getTempSensorState(TTemperatureSensor &ts) {
-	JsonDocument doc;
-
-	doc["id"] = ts.sensorId;
-	doc["class"] = "temp";
-	// doc["data"]["name"] = ts.name;
-	char tmp[6];
-	sprintf(tmp, "%0.2f", ts.measuredValue);
-	doc["data"]["value"] = tmp;
-	doc["data"]["direction"] = ts.direction;
-	doc["data"]["min"] = ts.minValue;
-	doc["data"]["max"] = ts.maxValue;
-	doc["data"]["critical"] = ts.criticalState;
-	return doc;
-}
-
-JsonDocument getTempSensorState(int idx) {
-	TTemperatureSensor ts = getTemperatureSensor(idx);
-	return getTempSensorState(ts);
 }
 
 /**
@@ -71,8 +60,6 @@ JsonDocument getTempSensorState(int idx) {
  */
 void storeTemperature(uint8_t idx, float value) {
 	// Serial.printf("device %s temperature changed from %0.2f to %0.2f\n", temperatureSensors[idx].name, temperatureSensors[idx].measuredValue, value);
-	if (value > temperatureSensors[idx].measuredValue) { temperatureSensors[idx].direction = 1; }
-	if (value < temperatureSensors[idx].measuredValue) { temperatureSensors[idx].direction = -1; }
 	temperatureSensors[idx].measuredValue = value;
 	temperatureSensors[idx].criticalState = value > temperatureSensors[idx].maxValue;
 }
@@ -84,7 +71,7 @@ void storeTemperature(DeviceAddress addr, float value) {
 	String deviceAddress = addressToStr(addr);
 //  Serial.printf("store temperature %0.2f for device %s\n", value, deviceAddress.c_str());
 	for (uint8_t i = 0; i < getTemperatureSensorsCount(); i++) {
-		if (strcmp(temperatureSensors[i].address, deviceAddress.c_str()) == 0) {
+		if (strcmp(temperatureSensors[i].id, deviceAddress.c_str()) == 0) {
 			storeTemperature(i, value);
 			break;
 		}
@@ -101,15 +88,6 @@ void storeTemperature(const char *name, float value) {
 			break;
 		}
 	}
-}
-
-unsigned long temperatureConversionWait(uint8_t resolution) {
-	uint8_t res = resolution;
-	if (res < 9 || res > 12) { res = 12; }
-	if (res == 9) { return 94; }
-	else if (res == 10) { return 188; }
-	else if (res == 11) { return 375; }
-	return 750;
 }
 
 /**
@@ -130,10 +108,9 @@ double getSensorTemperatureByName(const char *name) {
 
 /**
  * Return measured temperature of the sensor at the given index
- * Alias of the getSensorTemperature
  */
 float T(uint8_t idx) {
-  return getSensorTemperature(idx);
+  return temperatureSensors[idx].measuredValue;
 }
 
 /**
