@@ -12,7 +12,7 @@
 
 #include <WiFi.h>
 
-#define DEBUG
+#define DEBUG_
 #define ENYEM
 #define USE_SSL
 

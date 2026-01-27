@@ -159,20 +159,16 @@ bool THeatCtrl::processCommand(JsonDocument &doc, String &response) {
  * Put the 3-way taps into the default position
  */
 void THeatCtrl::M1() {
-  tap1.setOpen(false);
-  delay(RELAY_DELAY);
-  tap2.setOpen(false);
-  delay(RELAY_DELAY);
+  tap1.setOpen(false); delay(RELAY_DELAY);
+  tap2.setOpen(false); delay(RELAY_DELAY);
 }
 
 /**
  * Put the 3-way taps into the other position
  */
 void THeatCtrl::M2() {
-  tap1.setOpen(true);
-  delay(RELAY_DELAY);
-  tap2.setOpen(true);
-  delay(RELAY_DELAY);
+  tap1.setOpen(true); delay(RELAY_DELAY);
+  tap2.setOpen(true); delay(RELAY_DELAY);
 }
 
 /**
@@ -180,9 +176,7 @@ void THeatCtrl::M2() {
  */
 void THeatCtrl::setHsState(uint8_t newState) {
   if (newState == _hsState) { return; }
-  int stateChangeDiff = millis() - _lastStateChange;
-  if (stateChangeDiff < 0) stateChangeDiff = -stateChangeDiff;
-  if (stateChangeDiff < 1000) return;
+  if (millis() - _lastStateChange < 500) { return; }
   switch (newState) {
   case HS_PAUSED:
     // kind of switch off, keep taps position, but stop pumps and gas furnace
@@ -207,35 +201,27 @@ void THeatCtrl::setHsState(uint8_t newState) {
     break;
   case HS_WOOD_HOUSE:
     M1();
-    wfp.setOpen(true);
-    delay(RELAY_DELAY);
-    wbp.setOpen(false);
-    delay(RELAY_DELAY);
+    wfp.setOpen(true); delay(RELAY_DELAY);
+    wbp.setOpen(false); delay(RELAY_DELAY);
     gf.setOpen(false);
     break;
   case HS_BUFFER_HOUSE:
     M2();
-    wfp.setOpen(false);
-    delay(RELAY_DELAY);
-    wbp.setOpen(true);
-    delay(RELAY_DELAY);
+    wfp.setOpen(false); delay(RELAY_DELAY);
+    wbp.setOpen(true); delay(RELAY_DELAY);
     gf.setOpen(false);
     break;
   case HS_GAS_HOUSE:
     // if (hsState == HS_BUFFER_HOUSE && heatingTheHouse && (T(iTBT) > TMin(iTBT) - TDELTA)) return;
     M1();
-    wfp.setOpen(false);
-    delay(RELAY_DELAY);
-    wbp.setOpen(false);
-    delay(RELAY_DELAY);
+    wfp.setOpen(false); delay(RELAY_DELAY);
+    wbp.setOpen(false); delay(RELAY_DELAY);
     gf.setOpen(true);
     break;
   case HS_WOOD_BUFFER:
     M2();
-    wfp.setOpen(true);
-    delay(RELAY_DELAY);
-    wbp.setOpen(false);
-    delay(RELAY_DELAY);
+    wfp.setOpen(true); delay(RELAY_DELAY);
+    wbp.setOpen(false); delay(RELAY_DELAY);
     gf.setOpen(false);
     break;
   default: // HS_OFF

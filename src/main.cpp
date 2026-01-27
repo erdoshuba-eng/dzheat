@@ -418,6 +418,9 @@ void publishStatus() {
 
 	String url = String(MONITOR_URL) + "/api/device/" + deviceId + "/heartbeat";
 	httpPost(url, doc, {{"X-Device-ID", deviceId}});
+
+  // heatCtrl.tap1.publishStatus();
+  // heatCtrl.tap2.publishStatus();
 }
 
 /**

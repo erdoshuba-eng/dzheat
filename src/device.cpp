@@ -276,13 +276,13 @@ void TGate::setRemoteOpen(bool bOpen) {
 
 void TGate::setOpen(bool bOpen, bool isForced) {
 	unsigned long now = millis();
-	if (!isForced) {
-		if ((now > _config.lastChange) && (now - _config.lastChange < 1000)) { return; }
-		if (now < _config.lastChange) {
-			unsigned long diff = 4294967295 - _config.lastChange + now;
-			if (diff < 1000) { return; }
-		}
-	}
+	// if (!isForced) {
+	// 	if ((now > _config.lastChange) && (now - _config.lastChange < 1000)) { return; }
+	// 	if (now < _config.lastChange) {
+	// 		unsigned long diff = 4294967295 - _config.lastChange + now;
+	// 		if (diff < 1000) { return; }
+	// 	}
+	// }
 	// always set the state to override state changes caused by other sources
 	if (_config.isOpen == bOpen) { return; }
 	_config.isOpen = bOpen;
