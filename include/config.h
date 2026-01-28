@@ -13,7 +13,7 @@
 #include <WiFi.h>
 
 #define DEBUG_
-#define ENYEM
+#define ENYEM_
 #define USE_SSL
 
 #ifdef ENYEM

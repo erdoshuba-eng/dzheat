@@ -23,7 +23,7 @@ extern const char* password;
 extern const char* MONITOR_URL;
 extern const char* ROOT_CA;
 unsigned long lastWiFiConnectTrial;
-// WebServer webServer(80);
+WebServer webServer(80);
 unsigned long lastAlivePublished;
 
 bool canReadTemperature = false;
@@ -55,7 +55,7 @@ void handleUDPRequests();
 void initDevices();
 void initFS();
 void readTemperatures();
-// void setupWebServer();
+void setupWebServer();
 void setupTemperatureSensors();
 void setupTimers();
 void toggleLed(String newState);
@@ -83,7 +83,7 @@ void setup() {
   initDevices();
 
   connectToWiFi();
-  // setupWebServer(); // initialize the web server
+  setupWebServer(); // initialize the web server
   ArduinoOTA.begin(); // initialize OTA
 
   setupTimers();
@@ -99,7 +99,7 @@ void loop() {
     doCommunication();
 
     // HTTP server listens to requests
-    // webServer.handleClient();
+    webServer.handleClient();
     // listen if there is any request to upload code over the air
     ArduinoOTA.handle();
   }
@@ -172,8 +172,8 @@ void readTemperatures() {
 	if (sensorsCount < temperatureSensorsCount) {
 		// enumerate temperature sensors
 #ifdef DEBUG
-		Serial.print("temperature sensors: ");
-		Serial.println(sensorsCount);
+		// Serial.print("temperature sensors: ");
+		// Serial.println(sensorsCount);
 #endif
 		dtSensors.begin();
 		enumTemperatureSensors(dtSensors);
@@ -201,12 +201,12 @@ void readTemperatures() {
 //*******************
 // HTML communication
 //*******************
-/*
+
 void handleNotFound() {
   webServer.send(404, "text/plain", "404: Not found"); // Send HTTP status 404 (Not Found) when there's no handler for the URI in the request
 }
 
-// void htmlIndex() {
+void htmlIndex() {
 //   bool error = true;
 //   String resp, s;
 //   if (SPIFFS.exists("/index.html")) {
@@ -223,10 +223,10 @@ void handleNotFound() {
 //     handleNotFound();
 //   }
 //   else {
-//     webServer.send(200, "text/html", resp.c_str());
+    webServer.send(200, "text/html", "helcsi");
 //   }
-// }
-
+}
+/*
 String getDbVersion() {
   char tmp[255];
   String t = R"({"type":0,"version":"%s"})";
@@ -307,31 +307,36 @@ void getAnything() {
   }
   webServer.send(200, "text/html", resp.c_str());
 }
-
+*/
 void setAnything() {
   String resp = "ok";
   String cmd = webServer.arg("cmd");
-  if (cmd == "state") {
+  if (cmd == "heating") {
     String newState = webServer.arg("state");
-    if (webServer.hasArg("device")) {
-      String device = webServer.arg("device");
-      if (device == "wfp") wfp.setOpen(newState == "on"); else
-      if (device == "wbp") wbp.setOpen(newState == "on"); else
-      if (device == "gf") gf.setOpen(newState == "on"); else
-      if (device == "tap1") tap1.setOpen(newState == "on"); else
-      if (device == "tap2") tap2.setOpen(newState == "on");
-    }
-    else {
-      // setHsState(uint8_t(newState.toInt()));
-      setHsState(newState.toInt());
-    }
-  } else
-  if (cmd == "reboot") {
-    webServer.send(200, "text/html", resp.c_str());
-    ESP.restart();
+    heatCtrl.setHeatingTheHouse(newState == "on");
+    // Serial.printf("heating the house: %s\n", newState.c_str());
+  // } else
+  // if (cmd == "state") {
+  //   String newState = webServer.arg("state");
+  //   if (webServer.hasArg("device")) {
+  //     String device = webServer.arg("device");
+  //     if (device == "wfp") wfp.setOpen(newState == "on"); else
+  //     if (device == "wbp") wbp.setOpen(newState == "on"); else
+  //     if (device == "gf") gf.setOpen(newState == "on"); else
+  //     if (device == "tap1") tap1.setOpen(newState == "on"); else
+  //     if (device == "tap2") tap2.setOpen(newState == "on");
+  //   }
+  //   else {
+  //     // setHsState(uint8_t(newState.toInt()));
+  //     setHsState(newState.toInt());
+  //   }
+  // } else
+  // if (cmd == "reboot") {
+  //   webServer.send(200, "text/html", resp.c_str());
+  //   ESP.restart();
   }
   webServer.send(200, "text/html", resp.c_str());
-}*/
+}
 
 /**
  * Returns the corresponding content type of the
@@ -377,37 +382,37 @@ std::function<void()> sendFavicon {
 		sendFile("favicon.ico");
 	}
 };
-
+*/
 void setupWebServer() {
   displayLoadingStep("setup web server...");
   webServer.onNotFound(handleNotFound);
-  webServer.on("", sendIndex);
-  webServer.on("/", sendIndex);
-	webServer.on("/favicon.ico", sendFavicon);
-	webServer.on("/jquery-3.3.1.min.js", []() { sendFile("jquery-3.3.1.min.js"); });
-	webServer.on("/bootstrap.min.js", []() { sendFile("bootstrap.min.js"); });
-	webServer.on("/bootstrap.min.css", []() { sendFile("bootstrap.min.css"); });
-	webServer.on("/bootstrap-slider.min.js", []() { sendFile("bootstrap-slider.min.js"); });
-	webServer.on("/bootstrap-slider.min.css", []() { sendFile("bootstrap-slider.min.css"); });
-	webServer.on("/font-awesome.min.css", []() { sendFile("font-awesome.min.css"); });
-	webServer.on("/fonts/fontawesome-webfont.woff2", []() { sendFile("fontawesome-webfont.woff2"); });
-	webServer.on("/index.js", []() { sendFile("index.js"); });
-	webServer.on("/style.css", []() { sendFile("style.css"); });
+  webServer.on("", htmlIndex);
+  webServer.on("/", htmlIndex);
+	// webServer.on("/favicon.ico", sendFavicon);
+	// webServer.on("/jquery-3.3.1.min.js", []() { sendFile("jquery-3.3.1.min.js"); });
+	// webServer.on("/bootstrap.min.js", []() { sendFile("bootstrap.min.js"); });
+	// webServer.on("/bootstrap.min.css", []() { sendFile("bootstrap.min.css"); });
+	// webServer.on("/bootstrap-slider.min.js", []() { sendFile("bootstrap-slider.min.js"); });
+	// webServer.on("/bootstrap-slider.min.css", []() { sendFile("bootstrap-slider.min.css"); });
+	// webServer.on("/font-awesome.min.css", []() { sendFile("font-awesome.min.css"); });
+	// webServer.on("/fonts/fontawesome-webfont.woff2", []() { sendFile("fontawesome-webfont.woff2"); });
+	// webServer.on("/index.js", []() { sendFile("index.js"); });
+	// webServer.on("/style.css", []() { sendFile("style.css"); });
 //  server.on("/heating/getConfig", reportConfig);
-  webServer.on("/getState", reportState);
+  // webServer.on("/getState", reportState);
   // for debugging
-  webServer.on("/get", getAnything);
+  // webServer.on("/get", getAnything);
   webServer.on("/set", setAnything);
 //  webServer.on("/setDbg", setDbg);
-#ifdef SIMULATION
-  webServer.on("/simulation", beginSimulation);
-#endif
+// #ifdef SIMULATION
+  // webServer.on("/simulation", beginSimulation);
+// #endif
 
   // start the server
   webServer.begin();
   // wait 2 s for the server to start
-  endLoadingStep("HTTP server started", 2000);
-}*/
+  endLoadingStep("HTTP server started", 1000);
+}
 
 /**
  * Send a status message to the MQTT broker
@@ -637,7 +642,7 @@ void initDevices() {
 void handleUDPRequests() {
 	String request = detectUDPRequest("");
 	if (request == "") { return; }
-	// Serial.println("udp message: " + request);
+	Serial.println("udp message: " + request);
   ZList<TUDPParam> params = parseUDPMessage(request);
 
 	String cmd = getUDPParam(params, "cmd"); // what is the command, the other parameters depends on this
